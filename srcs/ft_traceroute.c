@@ -1,4 +1,5 @@
 #include "ft_traceroute.h"
+#include <time.h>
 
 static void handle_sigint(int sig)
 {
@@ -131,8 +132,8 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
                    + (end_ts.tv_nsec - send_ts.tv_nsec) / 1000000.0;
         printf("%d  %s (%.3f ms)\n", ttl, inet_ntoa(res_addr.sin_addr), rtt);
 
-        // STEP 4: increase ttl, stop if destination reached
-        if (icmph->type == ICMP_ECHOREPLY)
+        // STEP 4: increase ttl on ICMP_ECHOREPLY, stop if destination reached
+        if (icmph->type == ICMP_ECHOREPLY && res_addr.sin_addr.s_addr == target_addr.sin_addr.s_addr)
         {
             close(fd);
             break;
