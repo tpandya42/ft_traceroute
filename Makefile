@@ -6,6 +6,7 @@ SRC_DIR = srcs
 SRC = $(SRC_DIR)/main.c \
 	  $(SRC_DIR)/parse.c \
 	  $(SRC_DIR)/fqdn.c \
+	  $(SRC_DIR)/ft_traceroute.c \
 
 
 OBJ_DIR = obj

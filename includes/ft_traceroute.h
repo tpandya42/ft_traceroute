@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/time.h>
@@ -22,6 +23,7 @@ typedef struct s_config {
 	struct 	sockaddr_in target_addr;
 	int count;
 	uint16_t  pid;
+	int		timeout_ms;
 } t_config;
 
 typedef struct s_logs {
@@ -39,4 +41,5 @@ extern volatile sig_atomic_t g_sig;
 
 t_config	parseInput(char **argv);
 int resolveDNS(t_config *conf);
+int ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_str);
 #endif

@@ -4,9 +4,13 @@ volatile sig_atomic_t g_sig = 0;
 
 int main(int argc, char **argv)
 {
-    (void)argc;
     t_config    conf;
 
+    if (argc < 2)
+    {
+        fprintf(stderr, "Usage: ft_traceroute HOST\n");
+        return (1);
+    }
     printf("---- ENTERING PARSING FUNCTION---\n");
     conf = parseInput(argv);
     printf("---- PARSING SUCCESS---\n");
