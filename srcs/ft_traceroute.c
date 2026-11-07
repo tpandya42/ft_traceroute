@@ -57,45 +57,18 @@ static int  icmp_socket(t_config *conf, int ttl)
     return fd; 
 }
 
-static uint32_t checksumSum(const void *data, size_t len, uint32_t sum)
-{
-    const uint16_t *words = (const uint16_t *)data;
-    while (len > 1)
-    {
-        sum += *words++;
-        len -= 2;
-    }
-    if (len == 1) {
-        uint16_t odd_byte = 0;
-        *((uint8_t *)&odd_byte) = *(const uint8_t *)words;
-        sum += odd_byte;
-    }
-    return sum;
-}
-
-static uint16_t checksumFold(uint32_t sum)
-{
-    while (sum >> 16)
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    return (uint16_t)(~sum);
-}
-
-static uint16_t calculateChecksum(const void *data, size_t l)
-{
-    return checksumFold(checksumSum(data, l, 0));
-}
 
 int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_str)
 {
     signal(SIGINT, handle_sigint);
     int ttl = 1;
     int seq = 0;
-    int start_port = 33434;
+    int start_port = 33434; // traceroute uses same port by default
     (void)ip_str;
 
     printf("traceroute to %s (%s), 30 hops max, 60 byte packets\n", conf->hostname, conf->ip_str);
 
-    // Create raw ICMP receive socket once (reused for all TTLs)
+    // STEP 1: create raw ICMP socket for receiving (reused for all TTLs)
     int icmp_fd = icmp_socket(conf, 1);
     if (icmp_fd < 0) return -1;
 
@@ -108,7 +81,7 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
 
         printf("%2d  ", ttl);
 
-        // 3 probes per TTL
+        // 3 probes per TTL 
         for (int i = 0; i < 3; i++)
         {
             int port = start_port + seq;
@@ -118,7 +91,7 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
             memcpy(packet, &send_ts, sizeof(send_ts));
             memset(packet + sizeof(send_ts), 0x42, 56 - sizeof(send_ts));
 
-            // Send UDP probe
+            // STEP 2: Send UDP
             int udp_fd = udp_socket(conf, ttl);
             if (udp_fd < 0) { close(icmp_fd); return -1; }
 
@@ -129,14 +102,14 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
 
             if (sent_bytes < 0) { printf(" *"); seq++; continue; }
 
-            // Receive ICMP error on raw ICMP socket
+            // STEP 3: receive ICMP error on raw ICMP socket
             char buf[2048];
             struct sockaddr_in res_addr;
             socklen_t addr_len = sizeof(struct sockaddr_in);
             ssize_t n = recvfrom(icmp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
             if (n < 0) { printf(" *"); seq++; continue; }
 
-            // Validate packet size
+            // STEP 4: validate received packet size
             if (n < (ssize_t)sizeof(struct iphdr)) { printf(" *"); seq++; continue; }
             struct iphdr *iph = (struct iphdr *)buf;
             if (iph->protocol != IPPROTO_ICMP) { printf(" *"); seq++; continue; }
@@ -144,7 +117,7 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
             if (n < (ssize_t)(iphdr_len + sizeof(struct icmphdr))) { printf(" *"); seq++; continue; }
             struct icmphdr *icmph = (struct icmphdr *)(buf + iphdr_len);
 
-            // Verify embedded original UDP port matches our probe
+            // STEP 5: check if embedded original UDP port matches our sent udp request.
             uint8_t *orig_payload = (uint8_t *)icmph + sizeof(struct icmphdr);
             if (n < (ssize_t)(iphdr_len + sizeof(struct icmphdr) + sizeof(struct iphdr) + 8)) { printf(" *"); seq++; continue; }
             struct iphdr *orig_iph = (struct iphdr *)orig_payload;
@@ -165,7 +138,7 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
                 }
                 printf("  %.3f ms", rtt);
             }
-            else if (icmph->type == ICMP_DEST_UNREACHABLE && icmph->code == ICMP_PORT_UNREACHABLE) {
+            else if (icmph->type == ICMP_DEST_UNREACH && icmph->code == ICMP_PORT_UNREACH) {
                 if (!got_reply) {
                     strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
                     got_reply = 1;
