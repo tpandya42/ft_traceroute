@@ -82,67 +82,64 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
     int seq = 0;
     (void)ip_str;
 
+    printf("traceroute to %s (%s), 30 hops max, 60 byte packets\n", conf->hostname, conf->ip_str);
+
     while (!g_sig && ttl <= 30)
     {
         int fd = icmp_socket(conf, ttl);
         if (fd < 0) return -1;
-        // STEP 1: send echo request
-        struct timespec send_ts;
-        clock_gettime(CLOCK_MONOTONIC, &send_ts);
-        size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
-        if (icmp_len == 0)
+
+        int reached = 0;
+        int got_reply = 0;
+        char hop_ip[INET_ADDRSTRLEN];
+        memset(hop_ip, 0, sizeof(hop_ip));
+
+        printf("%2d  ", ttl);
+
+        // 3 probes per TTL
+        for (int i = 0; i < 3; i++)
         {
-            fprintf(stderr, "ft_traceroute: failed to build icmp packet\n");
-            close(fd);
-            return (-1);
-        }
+            struct timespec send_ts;
+            clock_gettime(CLOCK_MONOTONIC, &send_ts);
+            size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
+            if (icmp_len == 0) { close(fd); return (-1); }
 
-        ssize_t sent_bytes = sendto(fd, packet, icmp_len, 0, (struct sockaddr *)target_addr, sizeof(*target_addr));
-        if (sent_bytes < 0) {
-            perror ("ft_traceroute: sendto");
-            seq++;
-            ttl++;
-            close(fd);
-            continue;
-        }
+            ssize_t sent_bytes = sendto(fd, packet, icmp_len, 0, (struct sockaddr *)target_addr, sizeof(*target_addr));
+            if (sent_bytes < 0) { printf(" *"); seq++; continue; }
 
-        // STEP 2: receive reply
-        char    buf[2048];
-        struct sockaddr_in res_addr;
-        socklen_t    addr_len = sizeof(struct sockaddr_in);
-        ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
-        if (n < 0)
-        {
-            printf("%d  *\n", ttl);
-            seq++;
-            ttl++;
-            close(fd);
-            continue;
-        }
+            char buf[2048];
+            struct sockaddr_in res_addr;
+            socklen_t addr_len = sizeof(struct sockaddr_in);
+            ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
+            if (n < 0) { printf(" *"); seq++; continue; }
 
-        // parse IP header to reach ICMP header
-        struct iphdr *iph = (struct iphdr *)buf;
-        int iphdr_len = iph->ihl * 4;
-        struct icmphdr *icmph = (struct icmphdr *)(buf + iphdr_len);
+            struct iphdr *iph = (struct iphdr *)buf;
+            int iphdr_len = iph->ihl * 4;
+            struct icmphdr *icmph = (struct icmphdr *)(buf + iphdr_len);
 
-        // STEP 3: print rtt
-        if (icmph->type == ICMP_TIME_EXCEEDED || icmph->type == ICMP_ECHOREPLY) {
             struct timespec end_ts;
             clock_gettime(CLOCK_MONOTONIC, &end_ts);
             double rtt = (end_ts.tv_sec - send_ts.tv_sec) * 1000.0
                        + (end_ts.tv_nsec - send_ts.tv_nsec) / 1000000.0;
-            printf("%d  %s (%.3f ms)\n", ttl, inet_ntoa(res_addr.sin_addr), rtt);
+
+            if (!got_reply) {
+                strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
+                got_reply = 1;
+                printf(" %s (%s)", hop_ip, hop_ip);
+            }
+            printf("  %.3f ms", rtt);
+
+            if (icmph->type == ICMP_ECHOREPLY && res_addr.sin_addr.s_addr == target_addr->sin_addr.s_addr)
+                reached = 1;
+            seq++;
         }
 
-        // STEP 4: increase ttl on ICMP_ECHOREPLY, stop if destination reached
-        if (icmph->type == ICMP_ECHOREPLY && res_addr.sin_addr.s_addr == target_addr->sin_addr.s_addr)
-        {
-            close(fd);
-            break;
-        }
-        seq++;
-        ttl++;
         close(fd);
+        printf("\n");
+
+        if (reached)
+            break;
+        ttl++;
     }
 
     return (0);
