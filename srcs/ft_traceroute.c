@@ -20,6 +20,8 @@ static int  icmp_socket(t_config *conf, int ttl)
     if (setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
     {
         perror("ft_traceroute: setsockopt(IP_TTL)");
+        close(fd);
+        return (-1);
     }
 
     struct timeval tv;
@@ -113,8 +115,11 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
             ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
             if (n < 0) { printf(" *"); seq++; continue; }
 
+            if (n < (ssize_t)sizeof(struct iphdr)) { printf(" *"); seq++; continue; }
             struct iphdr *iph = (struct iphdr *)buf;
+            if (iph->protocol != IPPROTO_ICMP) { printf(" *"); seq++; continue; }
             int iphdr_len = iph->ihl * 4;
+            if (n < (ssize_t)(iphdr_len + sizeof(struct icmphdr))) { printf(" *"); seq++; continue; }
             struct icmphdr *icmph = (struct icmphdr *)(buf + iphdr_len);
 
             struct timespec end_ts;
@@ -122,14 +127,24 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
             double rtt = (end_ts.tv_sec - send_ts.tv_sec) * 1000.0
                        + (end_ts.tv_nsec - send_ts.tv_nsec) / 1000000.0;
 
-            if (!got_reply) {
-                strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
-                got_reply = 1;
-                printf(" %s (%s)", hop_ip, hop_ip);
+            if (icmph->type == ICMP_TIME_EXCEEDED ||
+                icmph->type == ICMP_ECHOREPLY ||
+                icmph->type == ICMP_DEST_UNREACHABLE)
+            {
+                if (!got_reply) {
+                    strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
+                    got_reply = 1;
+                    printf(" %s (%s)", hop_ip, hop_ip);
+                }
+                printf("  %.3f ms", rtt);
             }
-            printf("  %.3f ms", rtt);
+            else
+            {
+                printf(" *");
+            }
 
-            if (icmph->type == ICMP_ECHOREPLY && res_addr.sin_addr.s_addr == target_addr->sin_addr.s_addr)
+            if (icmph->type == ICMP_ECHOREPLY &&
+                res_addr.sin_addr.s_addr == target_addr->sin_addr.s_addr)
                 reached = 1;
             seq++;
         }
