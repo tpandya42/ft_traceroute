@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/ip.h>
+#include <netinet/udp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/time.h>

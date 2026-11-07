@@ -31,6 +31,7 @@ static int  udp_socket(t_config *conf, int ttl)
         perror("ft_traceroute: setsockopt(SO_RCVTIMEO)");
     return fd; 
 }
+
 static int  icmp_socket(t_config *conf, int ttl)
 {
     int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -84,31 +85,19 @@ static uint16_t calculateChecksum(const void *data, size_t l)
     return checksumFold(checksumSum(data, l, 0));
 }
 
-static size_t   buildEchoPacket(uint8_t *packet, uint16_t seq, uint16_t pid, struct timespec *st_time)
-{
-    size_t icmp_len = sizeof(struct icmphdr) + 56;
-    struct icmphdr *hdr = (struct icmphdr *)packet;
-    hdr->type = ICMP_ECHO;
-    hdr->code = 0;
-    hdr->un.echo.id = htons(pid);
-    hdr->un.echo.sequence = htons(seq);
-    hdr->checksum = 0;
-    uint8_t *payload = packet + sizeof(struct icmphdr);
-    memset(payload, 0x42, 56);
-    memcpy(payload + 56 - sizeof(struct timespec), st_time, sizeof(struct timespec));
-    hdr->checksum = calculateChecksum(packet, icmp_len);
-    return icmp_len;
-}
-
 int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_str)
 {
     signal(SIGINT, handle_sigint);
-    uint8_t packet[sizeof(struct icmphdr) + 1500];
     int ttl = 1;
     int seq = 0;
+    int start_port = 33434;
     (void)ip_str;
 
     printf("traceroute to %s (%s), 30 hops max, 60 byte packets\n", conf->hostname, conf->ip_str);
+
+    // Create raw ICMP receive socket once (reused for all TTLs)
+    int icmp_fd = icmp_socket(conf, 1);
+    if (icmp_fd < 0) return -1;
 
     while (!g_sig && ttl <= 30)
     {
@@ -122,28 +111,32 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
         // 3 probes per TTL
         for (int i = 0; i < 3; i++)
         {
+            int port = start_port + seq;
+            uint8_t packet[56];
             struct timespec send_ts;
             clock_gettime(CLOCK_MONOTONIC, &send_ts);
-//            size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
-            uint8_t packet[56];
-            struct timespec *send_ts_ptr = (struct timespec *)packet;
-            clock_gettime(CLOCK_MONOTONIC, send_ts_ptr);
-            memset(packet + sizeof(struct timespec),0x42, 56 - sizeof(struct timespec));
-    
-            int fd = udp_socket(conf, ttl);
-            if (fd < 0) return -1;
+            memcpy(packet, &send_ts, sizeof(send_ts));
+            memset(packet + sizeof(send_ts), 0x42, 56 - sizeof(send_ts));
+
+            // Send UDP probe
+            int udp_fd = udp_socket(conf, ttl);
+            if (udp_fd < 0) { close(icmp_fd); return -1; }
 
             struct sockaddr_in dest = *target_addr;
-            dest.sin_port = htons(base_port + seq);
-            ssize_t sent_bytes = sendto(fd, packet, 56, 0, (struct sockaddr *)&dest, sizeof(dest));
+            dest.sin_port = htons(port);
+            ssize_t sent_bytes = sendto(udp_fd, packet, 56, 0, (struct sockaddr *)&dest, sizeof(dest));
+            close(udp_fd);
+
             if (sent_bytes < 0) { printf(" *"); seq++; continue; }
 
+            // Receive ICMP error on raw ICMP socket
             char buf[2048];
             struct sockaddr_in res_addr;
             socklen_t addr_len = sizeof(struct sockaddr_in);
-            ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
+            ssize_t n = recvfrom(icmp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&res_addr, &addr_len);
             if (n < 0) { printf(" *"); seq++; continue; }
 
+            // Validate packet size
             if (n < (ssize_t)sizeof(struct iphdr)) { printf(" *"); seq++; continue; }
             struct iphdr *iph = (struct iphdr *)buf;
             if (iph->protocol != IPPROTO_ICMP) { printf(" *"); seq++; continue; }
@@ -151,15 +144,20 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
             if (n < (ssize_t)(iphdr_len + sizeof(struct icmphdr))) { printf(" *"); seq++; continue; }
             struct icmphdr *icmph = (struct icmphdr *)(buf + iphdr_len);
 
+            // Verify embedded original UDP port matches our probe
+            uint8_t *orig_payload = (uint8_t *)icmph + sizeof(struct icmphdr);
+            if (n < (ssize_t)(iphdr_len + sizeof(struct icmphdr) + sizeof(struct iphdr) + 8)) { printf(" *"); seq++; continue; }
+            struct iphdr *orig_iph = (struct iphdr *)orig_payload;
+            int orig_iphdr_len = orig_iph->ihl * 4;
+            struct udphdr *orig_udp = (struct udphdr *)(orig_payload + orig_iphdr_len);
+            if (ntohs(orig_udp->dest) != port) { printf(" *"); seq++; continue; }
+
             struct timespec end_ts;
             clock_gettime(CLOCK_MONOTONIC, &end_ts);
             double rtt = (end_ts.tv_sec - send_ts.tv_sec) * 1000.0
                        + (end_ts.tv_nsec - send_ts.tv_nsec) / 1000000.0;
 
-            if (icmph->type == ICMP_TIME_EXCEEDED ||
-                icmph->type == ICMP_ECHOREPLY ||
-                icmph->type == ICMP_DEST_UNREACHABLE)
-            {
+            if (icmph->type == ICMP_TIME_EXCEEDED) {
                 if (!got_reply) {
                     strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
                     got_reply = 1;
@@ -167,24 +165,26 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
                 }
                 printf("  %.3f ms", rtt);
             }
-            else
-            {
+            else if (icmph->type == ICMP_DEST_UNREACHABLE && icmph->code == ICMP_PORT_UNREACHABLE) {
+                if (!got_reply) {
+                    strncpy(hop_ip, inet_ntoa(res_addr.sin_addr), sizeof(hop_ip) - 1);
+                    got_reply = 1;
+                    printf(" %s (%s)", hop_ip, hop_ip);
+                }
+                printf("  %.3f ms", rtt);
+                reached = 1;
+            }
+            else {
                 printf(" *");
             }
-
-            if (icmph->type == ICMP_ECHOREPLY &&
-                res_addr.sin_addr.s_addr == target_addr->sin_addr.s_addr)
-                reached = 1;
             seq++;
         }
 
-        close(fd);
         printf("\n");
-
-        if (reached)
-            break;
+        if (reached) break;
         ttl++;
     }
 
+    close(icmp_fd);
     return (0);
 }
