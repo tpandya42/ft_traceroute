@@ -1,0 +1,121 @@
+#include "ft_traceroute.h"
+
+static void handle_sigint(int sig)
+{
+    (void)sig;
+    g_sig = 1;
+}
+
+static int  icmp_socket(t_config *conf, int ttl)
+{
+    int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+    if (fd < 0)
+    {
+        perror("ft_traceroute: socket");
+        return -1;
+    }
+
+    // set ttl
+    if (setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
+    {
+        perror("ft_traceroute: setsockopt(IP_TTL)");
+    }
+
+    struct timeval tv;
+    tv.tv_sec = conf->timeout_ms / 1000;
+    tv_tv_usec = (conf->timeout_ms % 1000) * 1000;
+    if (setsockopt(fd, SQL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+        perror("ft_traceroute: setsockopt(SO_RCVTIMEO)");
+    return fd; 
+}
+
+static uint32_t checksumSum(const void *data, size_t len, uint32_t sum)
+{
+    const uint16_t *words = (const uint16_t *)data;
+    while (len > 1)
+    {
+        sum += *words++;
+        len -= 2;
+    }
+    if (len == 1) {
+        uint16_t odd_byte = 0;
+        *((uint8_t *)&odd_byte) = *(const uint8_t *)words;
+        sum += odd_byte;
+    }
+    return sum;
+}
+
+static uint16_t checksumFold(uint32_t sum)
+{
+    while (sum >> 16)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)(~sum);
+}
+
+static uint16_t calculateChecksum(const void *data, size_t l)
+{
+    return checksumFold(checksumSum(data, l, 0));
+}
+
+static size_t   buildEchoPacket(uint8_t packet, uint16_t seq, uint16_t pid, struct timespec *st_time)
+{
+    size_t icmp_len = sizeof(struct icmphdr);
+    struct icmphdr *hdr = (struct icmphdr *)packet;
+    hdr->type = ICMP_ECHO;
+    hdr->code = 0;
+    hdr->un.echo.id = htons(pid);
+    hdr->un.echo.sequence = htons(seq);
+    hdr->checksum = 0;
+    uint8_t *payload = packet + sizeof(struct icmphdr);
+    memset(payload, 0x42, 56);
+    hdr->checksum = calculateChecksum(packet, icmp_len);
+    return icmp_len;
+}
+
+int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_str)
+{
+    signal(SIGINT, handle_sigint);
+    uint8_t packet[sizeof(struct icmphdr) + 1500];
+     
+
+    while (!g_sig)
+    {  
+        int ttl = 1;
+        int fd = icmp_socket(conf, ttl);
+        if (fd < 0) return -1;
+        // STEP 1: send echo request
+        struct timespec send_ts;
+        clock_gettime(CLOCK_MONOTONIC, &send_ts);
+        size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
+        if (icmp_len == 0)
+        {
+            fprintf(stderr, "ft_traceroute: failed to build icmp packet\n");
+            close(fd);
+            return (-1);
+        }
+
+        ssize_t sent_bytes = sendto(fd, packet, icmp_len, 0, (struct sockaddr *)target_addr, sizeof(*target_addr));
+        if (sent_bytes < 0) {
+            perror ("ft_traceroute: sendto");
+            seq++;
+            continue;
+        }
+
+
+        // STEP 2: receive reply
+        char    buf[2048];
+        struct sockaddr_in res_addr;
+        unsigned int    addr_len = sizeof(struct sockaddr_in);
+        if (recvfrom(fd, buf, icmp_len - sizeof(struct timeval), 0, (struct sockaddr *)res_addr, &addr) < 0)
+        {
+            continue;
+        }
+
+
+
+        // STEP 3: print rtt
+        // STEP 4: increase ttl
+    }
+
+    return (0);
+}
