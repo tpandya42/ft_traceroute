@@ -7,6 +7,30 @@ static void handle_sigint(int sig)
     g_sig = 1;
 }
 
+static int  udp_socket(t_config *conf, int ttl)
+{
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+    {
+        perror("ft_traceroute: socket");
+        return -1;
+    }
+
+    // set ttl
+    if (setsockopt(fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
+    {
+        perror("ft_traceroute: setsockopt(IP_TTL)");
+        close(fd);
+        return (-1);
+    }
+
+    struct timeval tv;
+    tv.tv_sec = conf->timeout_ms / 1000;
+    tv.tv_usec = (conf->timeout_ms % 1000) * 1000;
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+        perror("ft_traceroute: setsockopt(SO_RCVTIMEO)");
+    return fd; 
+}
 static int  icmp_socket(t_config *conf, int ttl)
 {
     int fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -88,9 +112,6 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
 
     while (!g_sig && ttl <= 30)
     {
-        int fd = icmp_socket(conf, ttl);
-        if (fd < 0) return -1;
-
         int reached = 0;
         int got_reply = 0;
         char hop_ip[INET_ADDRSTRLEN];
@@ -103,10 +124,18 @@ int     ft_traceroute(t_config *conf, struct sockaddr_in *target_addr, char *ip_
         {
             struct timespec send_ts;
             clock_gettime(CLOCK_MONOTONIC, &send_ts);
-            size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
-            if (icmp_len == 0) { close(fd); return (-1); }
+//            size_t icmp_len = buildEchoPacket(packet, seq, conf->pid, &send_ts);
+            uint8_t packet[56];
+            struct timespec *send_ts_ptr = (struct timespec *)packet;
+            clock_gettime(CLOCK_MONOTONIC, send_ts_ptr);
+            memset(packet + sizeof(struct timespec),0x42, 56 - sizeof(struct timespec));
+    
+            int fd = udp_socket(conf, ttl);
+            if (fd < 0) return -1;
 
-            ssize_t sent_bytes = sendto(fd, packet, icmp_len, 0, (struct sockaddr *)target_addr, sizeof(*target_addr));
+            struct sockaddr_in dest = *target_addr;
+            dest.sin_port = htons(base_port + seq);
+            ssize_t sent_bytes = sendto(fd, packet, 56, 0, (struct sockaddr *)&dest, sizeof(dest));
             if (sent_bytes < 0) { printf(" *"); seq++; continue; }
 
             char buf[2048];
