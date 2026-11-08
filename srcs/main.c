@@ -11,10 +11,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: ft_traceroute HOST\n");
         return (1);
     }
-    printf("---- ENTERING PARSING FUNCTION---\n");
     conf = parseInput(argv);
-    printf("---- PARSING SUCCESS---\n");
-    printf("hostname: %s\n", conf.hostname);
     
     if (resolveDNS(&conf) != 0)
     {
@@ -25,5 +22,6 @@ int main(int argc, char **argv)
     ret = ft_traceroute(&conf, &conf.target_addr, conf.ip_str);
     if (ret < 0)
         return (1);
+    free(conf.hostname);
     return (0);
 }

@@ -6,9 +6,10 @@
 
 static void print_usage(void)
 {
-	printf("Usage: ft_ping [-c COUNT] [-n] [-q] [-r] [-s SIZE]\n");
-	printf("                [-t TTL] [-T TOS] [--ip-timestamp=FLAG] [-v] [-w TIMEOUT] [-W LINGER]\n");
-	printf("                [-p PATTERN] [-6] [-?] [-h] HOST ...\n");
+	printf("Usage:\n");
+    printf("  ft_traceroute host\n");
+    printf("Arguments:\n");
+    printf("      host      The host to traceroute to\n");
 }
 
 t_config	parseInput(char **argv)
